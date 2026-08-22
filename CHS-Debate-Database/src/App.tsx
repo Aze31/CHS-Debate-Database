@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CHSLogo from './assets/CHS-Logo.png'
 import './App.css'
 
 type Tournament = { name: string; date: string; sortDate: number; divisions: string[]; circuits: string[]; location: string }
@@ -24,7 +25,6 @@ function parseTournamentTable(html: string): Tournament[] {
 }
 
 function App() {
-  const[pages, setCurPage] = useState<page[]>([])
   const [tournaments, setTournaments] = useState<Tournament[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
@@ -47,6 +47,12 @@ function App() {
 
   return <main className="directory">
     <header className="masthead">
+      <p className="title">CHS Debate Database (WIP)</p>
+      <img src={CHSLogo} alt="CHS logo" style={{
+        position: 'absolute',
+        top:'80px',
+        right:'20px',
+        scale:'1.2'}}/>
       <p className="eyebrow">CHS / Debate Database</p>
       <h1>Upcoming tournaments</h1>
       <p className="intro">A live index of National Speech and Debate Association events, organized by the next date on the calendar.</p>
@@ -67,7 +73,7 @@ function App() {
             <td><div className="tag-list">{tournament.circuits.map((circuit) => <span className="circuit" key={circuit}>{circuit}</span>)}</div></td>
             <td className="date">{tournament.date}</td></tr>)}</tbody></table>}
     </section>
-    <footer>Data sourced through <a href="https://github.com/gmitch215/TabroomAPI" target="_blank" rel="noreferrer">TabroomAPI</a> · Future events only</footer>
+    <footer>Data sourced through <a href="https://github.com/gmitch215/TabroomAPI" target="_blank" rel="noreferrer">TabroomAPI</a></footer>
   </main>
 }
 

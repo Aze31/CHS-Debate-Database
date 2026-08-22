@@ -1,6 +1,7 @@
 .directory { max-width: 1280px; margin: 0 auto; padding: 72px 48px 32px; }
 .masthead { max-width: 720px; margin-bottom: 56px; }
 .eyebrow { color: #c85b35; font: 700 12px/1.2 monospace; letter-spacing: 1.5px; text-transform: uppercase; }
+.title {color:#173c47; font: 1000 40px/1.1 monospace; font-family: 'sans-serif';font-weight: 'bold'}
 h1 { margin: 20px 0 14px; color: #173c47; font: 700 clamp(42px, 6vw, 76px)/.98 Georgia, serif; letter-spacing: 0; }
 .intro { max-width: 590px; color: #66757a; font-size: 18px; }
 .meta { display: flex; gap: 9px; align-items: center; margin-top: 28px; color: #c85b35; font: 700 12px/1.2 monospace; letter-spacing: .4px; text-transform: uppercase; }
