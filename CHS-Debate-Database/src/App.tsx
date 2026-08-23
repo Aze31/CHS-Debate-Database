@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import CHSLogo from './assets/CHS-Logo.png'
 import './App.css'
 
 type Tournament = { name: string; date: string; sortDate: number; divisions: string[]; circuits: string[]; location: string }
-type page = {name : string; reached : number; }
+type SpeechdropFile = { id: string; name: string; size: number; uploadedAt: number }
+type SpeechdropRound = { code: string; name: string; expiresAt: number; files: SpeechdropFile[] }
 function parseTournamentTable(html: string): Tournament[] {
   const document = new DOMParser().parseFromString(html, 'text/html')
   const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -23,8 +24,151 @@ function parseTournamentTable(html: string): Tournament[] {
     }]
   }).sort((a, b) => a.sortDate - b.sortDate)
 }
+function LinkToTab(): void {
+  window.open('https://tabroom.com', '_blank', 'noopener,noreferrer')
+}
+function LinkToGit(): void {
+  window.open('https://github.com/Aze31/CHS-Debate-Database', '_blank', 'noopener,noreferrer')
+}
+
+function goToSpeechdrop(path = '/speechdrop'): void {
+  window.history.pushState({}, '', path)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
+
+function formatFileSize(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function SpeechdropHome() {
+  const [roundName, setRoundName] = useState('')
+  const [roundCode, setRoundCode] = useState('')
+  const [error, setError] = useState('')
+  const [createdCode, setCreatedCode] = useState('')
+
+  async function createRound(): Promise<void> {
+    setError('')
+    const response = await fetch('/api/speechdrop/rounds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: roundName }) })
+    const result = await response.json() as { code?: string; error?: string }
+    if (!response.ok || !result.code) return setError(result.error ?? 'Could not create the round.')
+    setCreatedCode(result.code)
+    setRoundName('')
+  }
+
+  function joinRound(): void {
+    const normalizedCode = roundCode.trim().toUpperCase()
+    if (!normalizedCode) return setError('Enter a round code to join.')
+    goToSpeechdrop(`/speechdrop/${normalizedCode}`)
+  }
+
+  return <main className="directory speechdrop-page">
+    <header className="masthead">
+      <nav className="top-nav"><button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button><button className="tabs" onClick={LinkToTab}>TR</button><button className="tabs" onClick={LinkToGit}>Git</button></nav>
+      <p className="eyebrow">CHS / Speechdrop</p>
+      <h1>Drop cases here</h1>
+      <p className="intro">Create a temporary room for a tournament round, then share the code so everyone can exchange PDFs.</p>
+    </header>
+    <section className="speechdrop-grid" aria-label="Speechdrop round access">
+      <form className="speechdrop-panel" onSubmit={(event) => { event.preventDefault(); void createRound() }}>
+        <span className="panel-kicker">Start a room</span>
+        <h2>Create a round</h2>
+        <label htmlFor="round-name">Round or event name</label>
+        <input id="round-name" value={roundName} onChange={(event) => setRoundName(event.target.value)} placeholder="JV LD Finals" required />
+        <button className="primary-action" type="submit">Generate round code</button>
+        {createdCode && <p className="created-code">Share this code: <strong>{createdCode}</strong></p>}
+      </form>
+      <form className="speechdrop-panel join-panel" onSubmit={(event) => { event.preventDefault(); joinRound() }}>
+        <span className="panel-kicker">Join a room</span>
+        <h2>Enter a code</h2>
+        <label htmlFor="round-code">Round code</label>
+        <input id="round-code" value={roundCode} onChange={(event) => setRoundCode(event.target.value)} placeholder="ABC123" maxLength={6} autoCapitalize="characters" required />
+        <button className="primary-action" type="submit">Open Speechdrop</button>
+      </form>
+    </section>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <p className="expiry-note">Rooms and their files are available for one hour.</p>
+  </main>
+}
+
+function SpeechdropRoom({ code }: { code: string }) {
+  const [round, setRound] = useState<SpeechdropRound | null>(null)
+  const [error, setError] = useState('Loading room...')
+  const [secondsLeft, setSecondsLeft] = useState(3600)
+  const [uploading, setUploading] = useState(false)
+
+  async function loadRound(): Promise<void> {
+    const response = await fetch(`/api/speechdrop/rounds/${code}`)
+    const result = await response.json() as SpeechdropRound & { error?: string }
+    if (!response.ok) return setError(result.error ?? 'That round is unavailable.')
+    setRound(result); setError(''); setSecondsLeft(Math.max(0, Math.ceil((result.expiresAt - Date.now()) / 1000)))
+  }
+
+  useEffect(() => { void loadRound() }, [code])
+
+  useEffect(() => {
+    if (!round) return
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((round.expiresAt - Date.now()) / 1000))
+      setSecondsLeft(remaining)
+      if (remaining === 0) {
+        window.clearInterval(timer)
+        goToSpeechdrop('/speechdrop')
+      }
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [round])
+
+  async function uploadFiles(files: FileList | File[]): Promise<void> {
+    const pdfs = Array.from(files).filter((file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))
+    if (!pdfs.length) return setError('Only PDF files can be dropped here.')
+    setUploading(true); setError('')
+    try {
+      for (const file of pdfs) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`))
+          reader.readAsDataURL(file)
+        })
+        const response = await fetch(`/api/speechdrop/rounds/${code}/files`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, type: 'application/pdf', data }) })
+        const result = await response.json() as { error?: string }
+        if (!response.ok) throw new Error(result.error ?? `Could not upload ${file.name}.`)
+      }
+      await loadRound()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Upload failed.') }
+    finally { setUploading(false) }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    void uploadFiles(event.dataTransfer.files)
+  }
+
+  const minutes = Math.floor(secondsLeft / 60).toString().padStart(2, '0')
+  const seconds = (secondsLeft % 60).toString().padStart(2, '0')
+  return <main className="directory speechdrop-page room-page">
+    <header className="masthead room-header">
+      <nav className="top-nav"><button className="tabs" onClick={() => goToSpeechdrop('/speechdrop')}>Speechdrop</button><button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button></nav>
+      <p className="eyebrow">Speechdrop / {code}</p>
+      <h1>{round?.name ?? 'Opening round...'}</h1>
+      <div className="room-meta"><span>Expires in {minutes}:{seconds}</span><strong>{code}</strong></div>
+    </header>
+    {error && !round && <section className="empty-state error-state"><strong>{error}</strong><button className="primary-action" onClick={() => goToSpeechdrop('/speechdrop')}>Back to Speechdrop</button></section>}
+    {round && <>
+      <section className="dropzone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
+        <input id="pdf-upload" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => { if (event.target.files) void uploadFiles(event.target.files) }} />
+        <label htmlFor="pdf-upload"><strong>{uploading ? 'Uploading PDFs...' : 'Drop PDFs here'}</strong><span>or click to browse your files</span></label>
+      </section>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <section className="file-list" aria-label="Shared PDF files"><div className="file-list-header"><h2>Shared files</h2><span>{round.files.length} PDF{round.files.length === 1 ? '' : 's'}</span></div>
+        {round.files.length === 0 ? <p className="empty-files">No files have been shared yet.</p> : round.files.map((file) => <a className="file-row" href={`/api/speechdrop/rounds/${code}/files/${file.id}`} key={file.id}><span><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small></span><span className="download-label">Download</span></a>)}
+      </section>
+    </>}
+  </main>
+}
 
 function App() {
+  const [path, setPath] = useState(window.location.pathname)
   const [tournaments, setTournaments] = useState<Tournament[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
@@ -45,8 +189,23 @@ function App() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    const handlePopState = () => setPath(window.location.pathname)
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  if (path === '/speechdrop') return <SpeechdropHome />
+  if (path.startsWith('/speechdrop/')) return <SpeechdropRoom code={path.split('/')[2]?.toUpperCase() ?? ''} />
+
   return <main className="directory">
     <header className="masthead">
+      <button className="tabs">Login (TR)</button>
+      <button className="tabs">Admin</button>
+      <button className = "tabs" onClick={LinkToTab}>TR</button>
+      <button className = "tabs" onClick={LinkToGit}>Git</button>
+      <button className="tabs" onClick={() => goToSpeechdrop('/speechdrop')}>Drop</button>
+
       <p className="title">CHS Debate Database (WIP)</p>
       <img src={CHSLogo} alt="CHS logo" style={{
         position: 'absolute',
