@@ -5,6 +5,7 @@ import './App.css'
 type Tournament = { name: string; date: string; sortDate: number; divisions: string[]; circuits: string[]; location: string }
 type SpeechdropFile = { id: string; name: string; size: number; uploadedAt: number }
 type SpeechdropRound = { code: string; name: string; expiresAt: number; files: SpeechdropFile[] }
+
 function parseTournamentTable(html: string): Tournament[] {
   const document = new DOMParser().parseFromString(html, 'text/html')
   const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -24,9 +25,11 @@ function parseTournamentTable(html: string): Tournament[] {
     }]
   }).sort((a, b) => a.sortDate - b.sortDate)
 }
+
 function LinkToTab(): void {
   window.open('https://tabroom.com', '_blank', 'noopener,noreferrer')
 }
+
 function LinkToGit(): void {
   window.open('https://github.com/Aze31/CHS-Debate-Database', '_blank', 'noopener,noreferrer')
 }
@@ -38,6 +41,26 @@ function goToSpeechdrop(path = '/speechdrop'): void {
 
 function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function LoginPage({ code }: { code: string }){
+  const [userName, setUsername] = useState('')
+  const [PassWord, setPassword] = useState('')
+  const [error, setError] = useState('')
+
+  async function loadRound(): Promise<void> {
+    const response = await fetch(`/api/loginPage/login${code}`)
+    const result = await response.json() as SpeechdropRound & { error?: string }
+  }
+
+  return<main className = "directory-login-page">
+    <header className="masthead">
+            <p className="eyebrow">CHS / Login (TR)</p>
+            <h1>Login with Tabroom</h1>
+            <p className="intro">Use your tabroom credentials to gain access to more features.</p>
+            
+    </header>
+  </main>
 }
 
 function SpeechdropHome() {
@@ -200,7 +223,7 @@ function App() {
 
   return <main className="directory">
     <header className="masthead">
-      <button className="tabs">Login (TR)</button>
+      <button className="tabs" onClick={() => LoginPage()}>Login (TR)</button>
       <button className="tabs">Admin</button>
       <button className = "tabs" onClick={LinkToTab}>TR</button>
       <button className = "tabs" onClick={LinkToGit}>Git</button>
