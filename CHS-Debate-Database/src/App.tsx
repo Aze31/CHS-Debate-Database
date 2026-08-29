@@ -1,4 +1,4 @@
-import { useEffect, useState, type DragEvent } from 'react'
+import { useEffect, useState, type DragEvent, type FormEvent } from 'react'
 import CHSLogo from './assets/CHS-Logo.png'
 import './App.css'
 
@@ -43,23 +43,76 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function LoginPage({ code }: { code: string }){
+function LoginPage() {
   const [userName, setUsername] = useState('')
   const [PassWord, setPassword] = useState('')
   const [error, setError] = useState('')
 
-  async function loadRound(): Promise<void> {
-    const response = await fetch(`/api/loginPage/login${code}`)
-    const result = await response.json() as SpeechdropRound & { error?: string }
+  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault()
+
+    const trimmedUserName = userName.trim()
+    const trimmedPassWord = PassWord.trim()
+    if (!trimmedUserName || !trimmedPassWord) {
+      setError('Both username and password are required.')
+      return
+    }
+
+    setError('')
+
+    const globalWindow = window as typeof window & {
+      userName?: string
+      PassWord?: string
+      username?: string
+      password?: string
+    }
+
+    globalWindow.userName = trimmedUserName
+    globalWindow.PassWord = trimmedPassWord
+    globalWindow.username = trimmedUserName
+    globalWindow.password = trimmedPassWord
+
+    goToSpeechdrop('/')
   }
 
-  return<main className = "directory-login-page">
+  return <main className="directory login-page">
     <header className="masthead">
-            <p className="eyebrow">CHS / Login (TR)</p>
-            <h1>Login with Tabroom</h1>
-            <p className="intro">Use your tabroom credentials to gain access to more features.</p>
-            
+      <nav className="top-nav">
+        <button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button>
+        <button className="tabs" onClick={LinkToTab}>TR</button>
+        <button className="tabs" onClick={LinkToGit}>Git</button>
+      </nav>
+      <p className="eyebrow">CHS / Login (TR)</p>
+      <h1>Login with Tabroom</h1>
+      <p className="intro">Use your tabroom credentials to gain access to more features.</p>
     </header>
+
+    <form className="login-panel" onSubmit={handleSubmit}>
+      <label htmlFor="tabroom-username">Username</label>
+      <input
+        id="tabroom-username"
+        type="text"
+        value={userName}
+        onChange={(event) => setUsername(event.target.value)}
+        placeholder="your.username"
+        autoComplete="username"
+        required
+      />
+
+      <label htmlFor="tabroom-password">Password</label>
+      <input
+        id="tabroom-password"
+        type="password"
+        value={PassWord}
+        onChange={(event) => setPassword(event.target.value)}
+        placeholder="••••••••"
+        autoComplete="current-password"
+        required
+      />
+
+      <button className="primary-action" type="submit">Log in</button>
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </form>
   </main>
 }
 
@@ -218,12 +271,13 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
+  if (path === '/login') return <LoginPage />
   if (path === '/speechdrop') return <SpeechdropHome />
   if (path.startsWith('/speechdrop/')) return <SpeechdropRoom code={path.split('/')[2]?.toUpperCase() ?? ''} />
 
   return <main className="directory">
     <header className="masthead">
-      <button className="tabs" onClick={() => LoginPage()}>Login (TR)</button>
+      <button className="tabs" onClick={() => goToSpeechdrop('/login')}>Login (TR)</button>
       <button className="tabs">Admin</button>
       <button className = "tabs" onClick={LinkToTab}>TR</button>
       <button className = "tabs" onClick={LinkToGit}>Git</button>
