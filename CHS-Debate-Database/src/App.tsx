@@ -1,10 +1,19 @@
-import { useEffect, useState, type DragEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import CHSLogo from './assets/CHS-Logo.png'
 import './App.css'
 
 type Tournament = { name: string; date: string; sortDate: number; divisions: string[]; circuits: string[]; location: string }
 type SpeechdropFile = { id: string; name: string; size: number; uploadedAt: number }
 type SpeechdropRound = { code: string; name: string; expiresAt: number; files: SpeechdropFile[] }
+type HistoryBallot = { round: string; result: 'Win' | 'Loss' | 'No result' }
+type HistoryTournament = { id: string; name: string; date: string; year: number; division: string }
+type YearlyStats = { year: number; wins: number; losses: number }
+
+async function readApiResponse<T>(response: Response): Promise<T> {
+  const result = await response.json() as T & { error?: string }
+  if (!response.ok) throw new Error(result.error ?? `Request failed with ${response.status}.`)
+  return result
+}
 
 function parseTournamentTable(html: string): Tournament[] {
   const document = new DOMParser().parseFromString(html, 'text/html')
@@ -45,46 +54,49 @@ function formatFileSize(bytes: number): string {
 
 function LoginPage() {
   const [userName, setUsername] = useState('')
-  const [PassWord, setPassword] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
 
-    const trimmedUserName = userName.trim()
-    const trimmedPassWord = PassWord.trim()
-    if (!trimmedUserName || !trimmedPassWord) {
+    const username = userName.trim()
+    if (!username || !password) {
       setError('Both username and password are required.')
       return
     }
 
     setError('')
-
-    const globalWindow = window as typeof window & {
-      userName?: string
-      PassWord?: string
-      username?: string
-      password?: string
+    setSubmitting(true)
+    try {
+      const response = await fetch('/api/tabroom/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      await readApiResponse<{ authenticated: boolean }>(response)
+      setPassword('')
+      goToSpeechdrop('/history')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Tabroom login failed.')
+    } finally {
+      setPassword('')
+      setSubmitting(false)
     }
-
-    globalWindow.userName = trimmedUserName
-    globalWindow.PassWord = trimmedPassWord
-    globalWindow.username = trimmedUserName
-    globalWindow.password = trimmedPassWord
-
-    goToSpeechdrop('/')
   }
 
   return <main className="directory login-page">
     <header className="masthead">
       <nav className="top-nav">
         <button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button>
+        <button className="tabs" onClick={() => goToSpeechdrop('/history')}>History</button>
         <button className="tabs" onClick={LinkToTab}>TR</button>
         <button className="tabs" onClick={LinkToGit}>Git</button>
       </nav>
       <p className="eyebrow">CHS / Login (TR)</p>
       <h1>Login with Tabroom</h1>
-      <p className="intro">Use your tabroom credentials to gain access to more features.</p>
+      <p className="intro">Sign in to view your Tabroom tournament history. Your password is sent to Tabroom for authentication and is not saved by this site.</p>
     </header>
 
     <form className="login-panel" onSubmit={handleSubmit}>
@@ -103,16 +115,144 @@ function LoginPage() {
       <input
         id="tabroom-password"
         type="password"
-        value={PassWord}
+        value={password}
         onChange={(event) => setPassword(event.target.value)}
         placeholder="••••••••"
         autoComplete="current-password"
         required
       />
 
-      <button className="primary-action" type="submit">Log in</button>
+      <button className="primary-action" type="submit" disabled={submitting}>{submitting ? 'Signing in...' : 'Log in'}</button>
       {error && <p className="form-error" role="alert">{error}</p>}
     </form>
+  </main>
+}
+
+function HistoryPage() {
+  const [tournaments, setTournaments] = useState<HistoryTournament[]>([])
+  const [yearlyStats, setYearlyStats] = useState<YearlyStats[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const [needsLogin, setNeedsLogin] = useState(false)
+  const [selectedId, setSelectedId] = useState('')
+  const [ballots, setBallots] = useState<HistoryBallot[]>([])
+  const [ballotStatus, setBallotStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [ballotError, setBallotError] = useState('')
+  const ballotRequestId = useRef(0)
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/tabroom/history')
+      .then((response) => readApiResponse<{ tournaments: HistoryTournament[]; yearlyStats: YearlyStats[] }>(response))
+      .then((result) => {
+        if (!active) return
+        setTournaments(result.tournaments)
+        setYearlyStats(result.yearlyStats)
+        setStatus('ready')
+      })
+      .catch((reason: unknown) => {
+        if (!active) return
+        const message = reason instanceof Error ? reason.message : 'Could not load Tabroom history.'
+        setError(message)
+        setNeedsLogin(/sign in|session has expired/i.test(message))
+        setStatus('error')
+      })
+    return () => { active = false }
+  }, [])
+
+  async function selectTournament(tournament: HistoryTournament): Promise<void> {
+    const requestId = ++ballotRequestId.current
+    setSelectedId(tournament.id)
+    setBallots([])
+    setBallotError('')
+    setBallotStatus('loading')
+    try {
+      const response = await fetch(`/api/tabroom/history/${encodeURIComponent(tournament.id)}`)
+      const result = await readApiResponse<{ ballots: HistoryBallot[] }>(response)
+      if (requestId !== ballotRequestId.current) return
+      setBallots(result.ballots)
+      setBallotStatus('ready')
+    } catch (reason) {
+      if (requestId !== ballotRequestId.current) return
+      setBallotError(reason instanceof Error ? reason.message : 'Could not load ballots.')
+      setBallotStatus('error')
+    }
+  }
+
+  async function logOut(): Promise<void> {
+    try {
+      const response = await fetch('/api/tabroom/session', { method: 'DELETE' })
+      await readApiResponse<{ authenticated: boolean }>(response)
+      goToSpeechdrop('/')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not sign out of Tabroom.')
+    }
+  }
+
+  const selectedTournament = tournaments.find((tournament) => tournament.id === selectedId)
+
+  return <main className="directory history-page">
+    <header className="masthead">
+      <nav className="top-nav">
+        <button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button>
+        <button className="tabs" aria-current="page" onClick={() => goToSpeechdrop('/history')}>History</button>
+        <button className="tabs" onClick={() => goToSpeechdrop('/speechdrop')}>Drop</button>
+        <button className="tabs" onClick={() => void logOut()}>Log out</button>
+      </nav>
+      <p className="eyebrow">CHS / Tabroom history</p>
+      <h1>Your tournament history</h1>
+      <p className="intro">Past tournaments and posted debate ballot decisions from your Tabroom account.</p>
+      <div className="meta"><span className="status-dot" />{status === 'loading' ? 'Loading Tabroom history' : status === 'error' ? needsLogin ? 'Sign in required' : 'History unavailable' : `${tournaments.length} tournaments`}</div>
+    </header>
+
+    {status === 'loading' && <section className="empty-state">Loading your tournament history...</section>}
+    {status === 'error' && <section className="empty-state error-state"><strong>{needsLogin ? 'Sign in with Tabroom to view your history.' : 'We could not load your Tabroom history.'}</strong><span>{error}</span><button className="primary-action" onClick={() => goToSpeechdrop('/login')}>Sign in with Tabroom</button></section>}
+    {status === 'ready' && error && <p className="form-error" role="alert">{error}</p>}
+    {status === 'ready' && <>
+      <div className="history-layout">
+        <div className="history-main">
+          <section className="table-shell history-tournaments" aria-label="Past tournaments">
+            <div className="history-section-heading"><h2>Tournaments</h2><span>Select a tournament to view ballots</span></div>
+            {tournaments.length === 0 ? <div className="empty-state">No past tournament entries were found on this Tabroom account.</div> : <table>
+              <thead><tr><th>Tournament</th><th>Division</th><th>Date</th></tr></thead>
+              <tbody>{tournaments.map((tournament) => <tr key={tournament.id}>
+                <td><button className="tournament-link" onClick={() => void selectTournament(tournament)}>{tournament.name}</button></td>
+                <td>{tournament.division || '—'}</td>
+                <td className="date">{tournament.date || tournament.year || '—'}</td>
+              </tr>)}</tbody>
+            </table>}
+          </section>
+
+          {selectedTournament && <section className="table-shell ballot-panel" aria-label={`${selectedTournament.name} ballots`}>
+            <div className="history-section-heading"><h2>{selectedTournament.name}</h2><span>{selectedTournament.date} · {selectedTournament.division}</span></div>
+            {ballotStatus === 'loading' && <div className="empty-state">Loading ballots...</div>}
+            {ballotStatus === 'error' && <div className="empty-state error-state"><strong>Could not load ballots.</strong><span>{ballotError}</span></div>}
+            {ballotStatus === 'ready' && (ballots.length === 0 ? <div className="empty-state">No ballots were listed for this tournament.</div> : <table>
+              <thead><tr><th>Round</th><th>Decision</th></tr></thead>
+              <tbody>{ballots.map((ballot, index) => <tr key={`${ballot.round}-${index}`}><td>{ballot.round}</td><td className={`ballot-result ${ballot.result.toLowerCase().replace(' ', '-')}`}>{ballot.result}</td></tr>)}</tbody>
+            </table>)}
+          </section>}
+        </div>
+
+        <aside className="year-stats" aria-label="Win and loss rates by year">
+          <div className="history-section-heading"><h2>Record by year</h2></div>
+          {yearlyStats.length === 0 ? <p className="empty-files">No win/loss results are available.</p> : <div className="table-shell year-table-shell"><table>
+            <thead><tr><th>Year</th><th>W-L</th><th>Win %</th><th>Loss %</th></tr></thead>
+            <tbody>{yearlyStats.map((stats) => {
+              const total = stats.wins + stats.losses
+              const winRate = total ? Math.round((stats.wins / total) * 100) : null
+              const lossRate = total ? 100 - (winRate ?? 0) : null
+              return <tr key={stats.year}>
+                <td><strong>{stats.year}</strong></td>
+                <td>{stats.wins}-{stats.losses}</td>
+                <td>{winRate === null ? '—' : `${winRate}%`}</td>
+                <td>{lossRate === null ? '—' : `${lossRate}%`}</td>
+              </tr>
+            })}</tbody>
+          </table></div>}
+        </aside>
+      </div>
+    </>}
   </main>
 }
 
@@ -272,12 +412,14 @@ function App() {
   }, [])
 
   if (path === '/login') return <LoginPage />
+  if (path === '/history') return <HistoryPage />
   if (path === '/speechdrop') return <SpeechdropHome />
   if (path.startsWith('/speechdrop/')) return <SpeechdropRoom code={path.split('/')[2]?.toUpperCase() ?? ''} />
 
   return <main className="directory">
     <header className="masthead">
       <button className="tabs" onClick={() => goToSpeechdrop('/login')}>Login (TR)</button>
+      <button className="tabs" onClick={() => goToSpeechdrop('/history')}>History</button>
       <button className="tabs">Admin</button>
       <button className = "tabs" onClick={LinkToTab}>TR</button>
       <button className = "tabs" onClick={LinkToGit}>Git</button>
