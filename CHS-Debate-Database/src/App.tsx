@@ -1,17 +1,16 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
+import { useEffect, useState, type DragEvent, type FormEvent } from 'react'
 import CHSLogo from './assets/CHS-Logo.png'
 import './App.css'
 
 type Tournament = { name: string; date: string; sortDate: number; divisions: string[]; circuits: string[]; location: string }
 type SpeechdropFile = { id: string; name: string; size: number; uploadedAt: number }
 type SpeechdropRound = { code: string; name: string; expiresAt: number; files: SpeechdropFile[] }
-type HistoryBallot = { round: string; result: 'Win' | 'Loss' | 'No result' }
-type HistoryTournament = { id: string; name: string; date: string; year: number; division: string }
-type YearlyStats = { year: number; wins: number; losses: number }
+type NSDAMember = { id: number; name: string; points: number }
+type NSDAMemberResponse = { member: NSDAMember }
 
 async function readApiResponse<T>(response: Response): Promise<T> {
-  const result = await response.json() as T & { error?: string }
-  if (!response.ok) throw new Error(result.error ?? `Request failed with ${response.status}.`)
+  const result = await response.json() as T & { error?: string; message?: string }
+  if (!response.ok) throw new Error(result.error ?? result.message ?? `Request failed with ${response.status}.`)
   return result
 }
 
@@ -52,144 +51,56 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function LoginPage() {
-  const [userName, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-
-    const username = userName.trim()
-    if (!username || !password) {
-      setError('Both username and password are required.')
-      return
-    }
-
-    setError('')
-    setSubmitting(true)
-    try {
-      const response = await fetch('/api/tabroom/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      })
-      await readApiResponse<{ authenticated: boolean }>(response)
-      setPassword('')
-      goToSpeechdrop('/history')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Tabroom login failed.')
-    } finally {
-      setPassword('')
-      setSubmitting(false)
-    }
-  }
-
-  return <main className="directory login-page">
-    <header className="masthead">
-      <nav className="top-nav">
-        <button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button>
-        <button className="tabs" onClick={() => goToSpeechdrop('/history')}>History</button>
-        <button className="tabs" onClick={LinkToTab}>TR</button>
-        <button className="tabs" onClick={LinkToGit}>Git</button>
-      </nav>
-      <p className="eyebrow">CHS / Login (TR)</p>
-      <h1>Login with Tabroom</h1>
-      <p className="intro">Sign in to view your Tabroom tournament history. Your password is sent to Tabroom for authentication and is not saved by this site.</p>
-    </header>
-
-    <form className="login-panel" onSubmit={handleSubmit}>
-      <label htmlFor="tabroom-username">Username</label>
-      <input
-        id="tabroom-username"
-        type="text"
-        value={userName}
-        onChange={(event) => setUsername(event.target.value)}
-        placeholder="your.username"
-        autoComplete="username"
-        required
-      />
-
-      <label htmlFor="tabroom-password">Password</label>
-      <input
-        id="tabroom-password"
-        type="password"
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-        placeholder="••••••••"
-        autoComplete="current-password"
-        required
-      />
-
-      <button className="primary-action" type="submit" disabled={submitting}>{submitting ? 'Signing in...' : 'Log in'}</button>
-      {error && <p className="form-error" role="alert">{error}</p>}
-    </form>
-  </main>
-}
-
 function HistoryPage() {
-  const [tournaments, setTournaments] = useState<HistoryTournament[]>([])
-  const [yearlyStats, setYearlyStats] = useState<YearlyStats[]>([])
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [member, setMember] = useState<NSDAMember | null>(null)
+  const [userId, setUserId] = useState('')
+  const [requestedUserId, setRequestedUserId] = useState('')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [error, setError] = useState('')
-  const [needsLogin, setNeedsLogin] = useState(false)
-  const [selectedId, setSelectedId] = useState('')
-  const [ballots, setBallots] = useState<HistoryBallot[]>([])
-  const [ballotStatus, setBallotStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [ballotError, setBallotError] = useState('')
-  const ballotRequestId = useRef(0)
+  const [retry, setRetry] = useState(0)
 
   useEffect(() => {
+    if (!requestedUserId) return
     let active = true
-    fetch('/api/tabroom/history')
-      .then((response) => readApiResponse<{ tournaments: HistoryTournament[]; yearlyStats: YearlyStats[] }>(response))
+    fetch(`/api/nsda/history?userId=${encodeURIComponent(requestedUserId)}`)
+      .then((response) => readApiResponse<NSDAMemberResponse>(response))
       .then((result) => {
         if (!active) return
-        setTournaments(result.tournaments)
-        setYearlyStats(result.yearlyStats)
+        setMember(result.member)
         setStatus('ready')
       })
       .catch((reason: unknown) => {
         if (!active) return
-        const message = reason instanceof Error ? reason.message : 'Could not load Tabroom history.'
-        setError(message)
-        setNeedsLogin(/sign in|session has expired/i.test(message))
+        setError(reason instanceof Error ? reason.message : 'Could not load NSDA member history.')
         setStatus('error')
       })
     return () => { active = false }
-  }, [])
+  }, [requestedUserId, retry])
 
-  async function selectTournament(tournament: HistoryTournament): Promise<void> {
-    const requestId = ++ballotRequestId.current
-    setSelectedId(tournament.id)
-    setBallots([])
-    setBallotError('')
-    setBallotStatus('loading')
-    try {
-      const response = await fetch(`/api/tabroom/history/${encodeURIComponent(tournament.id)}`)
-      const result = await readApiResponse<{ ballots: HistoryBallot[] }>(response)
-      if (requestId !== ballotRequestId.current) return
-      setBallots(result.ballots)
-      setBallotStatus('ready')
-    } catch (reason) {
-      if (requestId !== ballotRequestId.current) return
-      setBallotError(reason instanceof Error ? reason.message : 'Could not load ballots.')
-      setBallotStatus('error')
+  function searchHistory(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault()
+    const normalizedUserId = userId.trim()
+    const numericUserId = Number(normalizedUserId)
+    if (!/^\d+$/.test(normalizedUserId) || !Number.isSafeInteger(numericUserId) || numericUserId < 1) {
+      setError('Enter a valid positive NSDA user ID.')
+      setMember(null)
+      setRequestedUserId('')
+      setStatus('error')
+      return
     }
+
+    setError('')
+    setMember(null)
+    setRequestedUserId(normalizedUserId)
+    setStatus('loading')
+    setRetry((attempt) => attempt + 1)
   }
 
-  async function logOut(): Promise<void> {
-    try {
-      const response = await fetch('/api/tabroom/session', { method: 'DELETE' })
-      await readApiResponse<{ authenticated: boolean }>(response)
-      goToSpeechdrop('/')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not sign out of Tabroom.')
-    }
+  function retryHistory(): void {
+    setError('')
+    setStatus('loading')
+    setRetry((attempt) => attempt + 1)
   }
-
-  const selectedTournament = tournaments.find((tournament) => tournament.id === selectedId)
 
   return <main className="directory history-page">
     <header className="masthead">
@@ -197,62 +108,28 @@ function HistoryPage() {
         <button className="tabs" onClick={() => goToSpeechdrop('/')}>Database</button>
         <button className="tabs" aria-current="page" onClick={() => goToSpeechdrop('/history')}>History</button>
         <button className="tabs" onClick={() => goToSpeechdrop('/speechdrop')}>Drop</button>
-        <button className="tabs" onClick={() => void logOut()}>Log out</button>
       </nav>
-      <p className="eyebrow">CHS / Tabroom history</p>
-      <h1>Your tournament history</h1>
-      <p className="intro">Past tournaments and posted debate ballot decisions from your Tabroom account.</p>
-      <div className="meta"><span className="status-dot" />{status === 'loading' ? 'Loading Tabroom history' : status === 'error' ? needsLogin ? 'Sign in required' : 'History unavailable' : `${tournaments.length} tournaments`}</div>
+      <p className="eyebrow">CHS / NSDA member history</p>
+      <h1>{member ? `${member.name}'s profile` : 'Member profile'}</h1>
+      <p className="intro">Look up an NSDA member by user ID to view their member profile and points.</p>
+      <div className="meta"><span className="status-dot" />{status === 'idle' ? 'Search by NSDA user ID' : status === 'loading' ? 'Loading NSDA member' : status === 'error' ? 'Member unavailable' : 'Member profile loaded'}</div>
     </header>
 
-    {status === 'loading' && <section className="empty-state">Loading your tournament history...</section>}
-    {status === 'error' && <section className="empty-state error-state"><strong>{needsLogin ? 'Sign in with Tabroom to view your history.' : 'We could not load your Tabroom history.'}</strong><span>{error}</span><button className="primary-action" onClick={() => goToSpeechdrop('/login')}>Sign in with Tabroom</button></section>}
-    {status === 'ready' && error && <p className="form-error" role="alert">{error}</p>}
-    {status === 'ready' && <>
-      <div className="history-layout">
-        <div className="history-main">
-          <section className="table-shell history-tournaments" aria-label="Past tournaments">
-            <div className="history-section-heading"><h2>Tournaments</h2><span>Select a tournament to view ballots</span></div>
-            {tournaments.length === 0 ? <div className="empty-state">No past tournament entries were found on this Tabroom account.</div> : <table>
-              <thead><tr><th>Tournament</th><th>Division</th><th>Date</th></tr></thead>
-              <tbody>{tournaments.map((tournament) => <tr key={tournament.id}>
-                <td><button className="tournament-link" onClick={() => void selectTournament(tournament)}>{tournament.name}</button></td>
-                <td>{tournament.division || '—'}</td>
-                <td className="date">{tournament.date || tournament.year || '—'}</td>
-              </tr>)}</tbody>
-            </table>}
-          </section>
+    <form className="login-panel" onSubmit={searchHistory}>
+      <label htmlFor="nsda-user-id">NSDA user ID</label>
+      <input id="nsda-user-id" type="text" inputMode="numeric" pattern="[0-9]+" value={userId} onChange={(event) => setUserId(event.target.value)} placeholder="Enter a member ID" required />
+      <button className="primary-action" type="submit" disabled={status === 'loading'}>{status === 'loading' ? 'Searching...' : 'Search member'}</button>
+      {status === 'error' && !requestedUserId && <p className="form-error" role="alert">{error}</p>}
+    </form>
 
-          {selectedTournament && <section className="table-shell ballot-panel" aria-label={`${selectedTournament.name} ballots`}>
-            <div className="history-section-heading"><h2>{selectedTournament.name}</h2><span>{selectedTournament.date} · {selectedTournament.division}</span></div>
-            {ballotStatus === 'loading' && <div className="empty-state">Loading ballots...</div>}
-            {ballotStatus === 'error' && <div className="empty-state error-state"><strong>Could not load ballots.</strong><span>{ballotError}</span></div>}
-            {ballotStatus === 'ready' && (ballots.length === 0 ? <div className="empty-state">No ballots were listed for this tournament.</div> : <table>
-              <thead><tr><th>Round</th><th>Decision</th></tr></thead>
-              <tbody>{ballots.map((ballot, index) => <tr key={`${ballot.round}-${index}`}><td>{ballot.round}</td><td className={`ballot-result ${ballot.result.toLowerCase().replace(' ', '-')}`}>{ballot.result}</td></tr>)}</tbody>
-            </table>)}
-          </section>}
-        </div>
-
-        <aside className="year-stats" aria-label="Win and loss rates by year">
-          <div className="history-section-heading"><h2>Record by year</h2></div>
-          {yearlyStats.length === 0 ? <p className="empty-files">No win/loss results are available.</p> : <div className="table-shell year-table-shell"><table>
-            <thead><tr><th>Year</th><th>W-L</th><th>Win %</th><th>Loss %</th></tr></thead>
-            <tbody>{yearlyStats.map((stats) => {
-              const total = stats.wins + stats.losses
-              const winRate = total ? Math.round((stats.wins / total) * 100) : null
-              const lossRate = total ? 100 - (winRate ?? 0) : null
-              return <tr key={stats.year}>
-                <td><strong>{stats.year}</strong></td>
-                <td>{stats.wins}-{stats.losses}</td>
-                <td>{winRate === null ? '—' : `${winRate}%`}</td>
-                <td>{lossRate === null ? '—' : `${lossRate}%`}</td>
-              </tr>
-            })}</tbody>
-          </table></div>}
-        </aside>
-      </div>
-    </>}
+    {status === 'loading' && <section className="empty-state">Loading NSDA member data...</section>}
+    {status === 'error' && requestedUserId && <section className="empty-state error-state"><strong>We could not load this NSDA member.</strong><span>{error}</span><button className="primary-action" onClick={retryHistory}>Try again</button></section>}
+    {status === 'ready' && member && <section className="year-table-shell table-shell" aria-label="NSDA member profile">
+      <div className="history-section-heading"><h2>Member overview</h2></div>
+      <p className="empty-files"><strong>NSDA ID</strong><br />{member.id}</p>
+      <p className="empty-files"><strong>Name</strong><br />{member.name}</p>
+      <p className="empty-files"><strong>Total points</strong><br />{member.points ?? 'Not listed'}</p>
+    </section>}
   </main>
 }
 
@@ -411,14 +288,12 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  if (path === '/login') return <LoginPage />
-  if (path === '/history') return <HistoryPage />
+  if (path === '/login' || path === '/history') return <HistoryPage />
   if (path === '/speechdrop') return <SpeechdropHome />
   if (path.startsWith('/speechdrop/')) return <SpeechdropRoom code={path.split('/')[2]?.toUpperCase() ?? ''} />
 
   return <main className="directory">
     <header className="masthead">
-      <button className="tabs" onClick={() => goToSpeechdrop('/login')}>Login (TR)</button>
       <button className="tabs" onClick={() => goToSpeechdrop('/history')}>History</button>
       <button className="tabs">Admin</button>
       <button className = "tabs" onClick={LinkToTab}>TR</button>
