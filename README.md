@@ -7,7 +7,7 @@ npm run dev locally.
 
 If you have any suggestions, comments, or advice, open up an issue.
 
-## NSDA member history
+## NSDA member history (devs only)
 
 The History page sends the entered member ID to the Vite server middleware, which requests the NSDA member, roles, points, honors, and point-category endpoints using HTTP Basic authentication. Credentials are read only on the server and are never sent to the browser.
 
